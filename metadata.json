@@ -1,0 +1,6 @@
+{
+  "name": "Valo Bank",
+  "description": "Mobile-first virtual banking app with secure login, instant IBAN transfers using virtual play funds, and real-time transaction tracking.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,376 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net: Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // Global Hardened Helpers
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerified() && request.auth.token.email == 'automaticstrong@gmail.com';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidIban(iban) {
+      return iban is string && iban.size() == 18 && iban.matches('^VA[0-9]{16}$');
+    }
+
+    // =========================================================================
+    // Entity Validation Blueprints (Anti-Update-Gap)
+    // =========================================================================
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'iban', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'iban', 'createdAt', 'updatedAt'])
+        && data.uid is string && isValidId(data.uid) && data.uid == request.auth.uid
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60
+        && isValidIban(data.iban)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidIbanDirectoryEntry(data) {
+      return data.keys().hasAll(['iban', 'ownerUid', 'accountHolderName', 'createdAt'])
+        && data.keys().hasOnly(['iban', 'ownerUid', 'accountHolderName', 'createdAt'])
+        && isValidIban(data.iban)
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && data.accountHolderName is string && data.accountHolderName.size() >= 1 && data.accountHolderName.size() <= 60
+        && data.createdAt is timestamp;
+    }
+
+    function isValidBankAccount(data) {
+      return data.keys().hasAll(['ownerUid', 'iban', 'balanceCents', 'currency', 'accountStatus', 'lastTxId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'iban', 'balanceCents', 'currency', 'accountStatus', 'lastTxId', 'createdAt', 'updatedAt'])
+        && data.ownerUid is string && isValidId(data.ownerUid)
+        && isValidIban(data.iban)
+        && data.balanceCents is int && data.balanceCents >= 0 && data.balanceCents <= 1000000000000
+        && data.currency is string && data.currency == 'EUR'
+        && data.accountStatus is string && (data.accountStatus == 'active' || data.accountStatus == 'frozen')
+        && data.lastTxId is string && isValidId(data.lastTxId)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTransactionRecord(data) {
+      return data.keys().hasAll([
+          'txId', 'type', 'status', 'senderUid', 'recipientUid',
+          'senderIban', 'recipientIban', 'senderName', 'recipientName',
+          'amountCents', 'note', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'txId', 'type', 'status', 'senderUid', 'recipientUid',
+          'senderIban', 'recipientIban', 'senderName', 'recipientName',
+          'amountCents', 'note', 'createdAt'
+        ])
+        && data.txId is string && isValidId(data.txId)
+        && data.type is string && (data.type == 'transfer' || data.type == 'topup')
+        && data.status is string && data.status == 'completed'
+        && data.senderUid is string && isValidId(data.senderUid)
+        && data.recipientUid is string && isValidId(data.recipientUid)
+        && isValidIban(data.senderIban)
+        && isValidIban(data.recipientIban)
+        && data.senderName is string && data.senderName.size() >= 1 && data.senderName.size() <= 60
+        && data.recipientName is string && data.recipientName.size() >= 1 && data.recipientName.size() <= 60
+        && data.amountCents is int && data.amountCents >= 1 && data.amountCents <= 100000000000
+        && data.note is string && data.note.size() <= 140
+        && data.createdAt is timestamp;
+    }
+
+    function isValidSavedContact(data) {
+      return data.keys().hasAll(['iban', 'ownerUid', 'name', 'addedAt'])
+        && data.keys().hasOnly(['iban', 'ownerUid', 'name', 'addedAt'])
+        && isValidIban(data.iban)
+        && data.ownerUid is string && isValidId(data.ownerUid) && data.ownerUid == request.auth.uid
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 60
+        && data.addedAt is timestamp;
+    }
+
+    // =========================================================================
+    // /users/{userId} (Private PII - Owner or Verified Admin)
+    // =========================================================================
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.uid == request.auth.uid);
+
+      allow create: if isVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/ibanDirectory/$(incoming().iban))
+        && existsAfter(/databases/$(database)/documents/accounts/$(userId));
+
+      allow update: if isVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().email == existing().email
+        && incoming().iban == existing().iban
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+
+      allow delete: if false;
+
+      // Saved IBAN Contacts Subcollection (Master Gate)
+      match /contacts/{contactIban} {
+        allow get: if isValidId(userId) && isValidIban(contactIban) && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+        allow list: if isValidId(userId) && isOwner(userId)
+          && resource.data.ownerUid == request.auth.uid;
+
+        allow create: if isVerified()
+          && isValidId(userId)
+          && isValidIban(contactIban)
+          && isOwner(userId)
+          && isValidSavedContact(incoming())
+          && incoming().iban == contactIban
+          && incoming().addedAt == request.time
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && exists(/databases/$(database)/documents/ibanDirectory/$(contactIban));
+
+        allow update: if isVerified()
+          && isValidId(userId)
+          && isValidIban(contactIban)
+          && isOwner(userId)
+          && isValidSavedContact(incoming())
+          && incoming().iban == existing().iban
+          && incoming().ownerUid == existing().ownerUid
+          && incoming().addedAt == existing().addedAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['name'])
+          && exists(/databases/$(database)/documents/users/$(userId));
+
+        allow delete: if isVerified()
+          && isValidId(userId)
+          && isValidIban(contactIban)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId));
+      }
+    }
+
+    // =========================================================================
+    // /ibanDirectory/{iban} (Non-PII Exact-IBAN Recipient Lookup)
+    // =========================================================================
+    match /ibanDirectory/{iban} {
+      allow get: if isSignedIn() && isValidIban(iban);
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+
+      allow create: if isVerified()
+        && isValidIban(iban)
+        && isValidIbanDirectoryEntry(incoming())
+        && incoming().iban == iban
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+
+      allow update: if isVerified()
+        && isValidIban(iban)
+        && isValidIbanDirectoryEntry(incoming())
+        && existing().ownerUid == request.auth.uid
+        && incoming().iban == existing().iban
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['accountHolderName']);
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // /accounts/{userId} (Virtual EUR Balance, Unlimited Admin, & Freeze State)
+    // =========================================================================
+    match /accounts/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin() || (isSignedIn() && resource.data.ownerUid == request.auth.uid);
+
+      allow create: if isVerified()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidBankAccount(incoming())
+        && incoming().ownerUid == userId
+        && incoming().balanceCents == 100000
+        && incoming().accountStatus == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+        && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'topup'
+        && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.recipientUid == userId
+        && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.amountCents == 100000;
+
+      allow update: if isVerified()
+        && isValidId(userId)
+        && isValidBankAccount(incoming())
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().iban == existing().iban
+        && incoming().currency == existing().currency
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Owner or Admin toggles card/account freeze status
+          (
+            (isOwner(userId) || isAdmin())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['accountStatus', 'updatedAt'])
+          )
+          ||
+          // Action 2: Owner claims standard virtual play-money top-up (+500.00 EUR)
+          (
+            isOwner(userId)
+            && existing().accountStatus == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['balanceCents', 'lastTxId', 'updatedAt'])
+            && incoming().balanceCents == existing().balanceCents + 50000
+            && incoming().balanceCents <= 100000000
+            && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'topup'
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.recipientUid == userId
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.amountCents == 50000
+          )
+          ||
+          // Action 2b: Admin unlimited treasury grant / mint to self or any user account
+          (
+            isAdmin()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['balanceCents', 'lastTxId', 'updatedAt'])
+            && incoming().balanceCents > existing().balanceCents
+            && (incoming().balanceCents - existing().balanceCents) <= 100000000000
+            && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'topup'
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.recipientUid == userId
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.amountCents == (incoming().balanceCents - existing().balanceCents)
+          )
+          ||
+          // Action 3: Owner outgoing IBAN transfer debit
+          (
+            isOwner(userId)
+            && existing().accountStatus == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['balanceCents', 'lastTxId', 'updatedAt'])
+            && incoming().balanceCents < existing().balanceCents
+            && incoming().balanceCents >= 0
+            && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'transfer'
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.senderUid == userId
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.amountCents == (existing().balanceCents - incoming().balanceCents)
+          )
+          ||
+          // Action 3b: Admin unlimited outgoing transfer (balance remains untouched / unlimited)
+          (
+            isAdmin()
+            && isOwner(userId)
+            && existing().accountStatus == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['lastTxId', 'updatedAt'])
+            && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'transfer'
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.senderUid == userId
+          )
+          ||
+          // Action 4: Peer incoming IBAN transfer credit (atomic with sender debit OR admin unlimited transfer)
+          (
+            !isOwner(userId)
+            && existing().accountStatus == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['balanceCents', 'lastTxId', 'updatedAt'])
+            && incoming().balanceCents > existing().balanceCents
+            && (isAdmin() || (incoming().balanceCents - existing().balanceCents) <= 10000000)
+            && (incoming().balanceCents - existing().balanceCents) <= 100000000000
+            && existsAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId))
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.type == 'transfer'
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.senderUid == request.auth.uid
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.recipientUid == userId
+            && getAfter(/databases/$(database)/documents/transactions/$(incoming().lastTxId)).data.amountCents == (incoming().balanceCents - existing().balanceCents)
+            && (
+              isAdmin() ||
+              getAfter(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.balanceCents
+                == get(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.balanceCents - (incoming().balanceCents - existing().balanceCents)
+            )
+          )
+        );
+
+      allow delete: if false;
+    }
+
+    // =========================================================================
+    // /transactions/{txId} (Immutable Real-Time Ledger)
+    // =========================================================================
+    match /transactions/{txId} {
+      allow get: if isSignedIn()
+        && isValidId(txId)
+        && (isAdmin() || existing().senderUid == request.auth.uid || existing().recipientUid == request.auth.uid);
+
+      allow list: if isAdmin()
+        || (isSignedIn() && (resource.data.senderUid == request.auth.uid || resource.data.recipientUid == request.auth.uid));
+
+      allow create: if isVerified()
+        && isValidId(txId)
+        && isValidTransactionRecord(incoming())
+        && incoming().txId == txId
+        && incoming().createdAt == request.time
+        && (
+          // Standard Virtual Play Top-up (Welcome 1000 EUR or Faucet 500 EUR)
+          (
+            incoming().type == 'topup'
+            && incoming().senderUid == 'SYSTEM_VAULT'
+            && incoming().senderIban == 'VA0000000000000000'
+            && incoming().recipientUid == request.auth.uid
+            && (incoming().amountCents == 50000 || incoming().amountCents == 100000)
+            && getAfter(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.lastTxId == txId
+          )
+          ||
+          // Admin Treasury Unlimited Top-up / Grant to self or any user
+          (
+            isAdmin()
+            && incoming().type == 'topup'
+            && incoming().senderUid == 'SYSTEM_VAULT'
+            && incoming().senderIban == 'VA0000000000000000'
+            && exists(/databases/$(database)/documents/accounts/$(incoming().recipientUid))
+            && getAfter(/databases/$(database)/documents/accounts/$(incoming().recipientUid)).data.lastTxId == txId
+          )
+          ||
+          // Peer-to-Peer IBAN Transfer
+          (
+            incoming().type == 'transfer'
+            && incoming().senderUid == request.auth.uid
+            && incoming().recipientUid != request.auth.uid
+            && (isAdmin() || incoming().amountCents <= 10000000)
+            && exists(/databases/$(database)/documents/accounts/$(incoming().recipientUid))
+            && get(/databases/$(database)/documents/accounts/$(incoming().senderUid)).data.iban == incoming().senderIban
+            && get(/databases/$(database)/documents/accounts/$(incoming().recipientUid)).data.iban == incoming().recipientIban
+            && getAfter(/databases/$(database)/documents/accounts/$(incoming().senderUid)).data.lastTxId == txId
+            && getAfter(/databases/$(database)/documents/accounts/$(incoming().recipientUid)).data.lastTxId == txId
+            && (
+              isAdmin() ||
+              getAfter(/databases/$(database)/documents/accounts/$(incoming().senderUid)).data.balanceCents
+                == get(/databases/$(database)/documents/accounts/$(incoming().senderUid)).data.balanceCents - incoming().amountCents
+            )
+          )
+        );
+
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

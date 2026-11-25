@@ -1,0 +1,200 @@
+/**
+ * Payload-First Security Test Specification for Valo Bank Firestore Rules.
+ * Verifies the "Dirty Dozen" adversarial payloads against the Eight Pillars.
+ */
+
+export interface DirtyDozenCase {
+  id: number;
+  name: string;
+  operation: 'get' | 'list' | 'create' | 'update' | 'delete';
+  path: string;
+  actorUid: string | null;
+  emailVerified: boolean;
+  payload?: Record<string, unknown>;
+  expectedResult: 'PERMISSION_DENIED';
+  enforcingPillar: string;
+}
+
+export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
+  {
+    id: 1,
+    name: 'PII Blanket Read on another user profile',
+    operation: 'get',
+    path: '/users/victim_uid_123',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 6: PII Isolation',
+  },
+  {
+    id: 2,
+    name: 'Directory scraping via unfiltered list on /ibanDirectory',
+    operation: 'list',
+    path: '/ibanDirectory',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 8: Secure List Queries',
+  },
+  {
+    id: 3,
+    name: 'Shadow field injection on user profile create',
+    operation: 'create',
+    path: '/users/attacker_uid_999',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      uid: 'attacker_uid_999',
+      email: 'attacker@example.com',
+      displayName: 'Attacker',
+      iban: 'VA4211112222333344',
+      isAdmin: true,
+      createdAt: 'SERVER_TIME',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 2: Validation Blueprints (hasOnly)',
+  },
+  {
+    id: 4,
+    name: 'Arbitrary starting balance inflation on account creation',
+    operation: 'create',
+    path: '/accounts/attacker_uid_999',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      ownerUid: 'attacker_uid_999',
+      iban: 'VA4211112222333344',
+      balanceCents: 999999999,
+      currency: 'EUR',
+      accountStatus: 'active',
+      lastTxId: 'tx_fake_1',
+      createdAt: 'SERVER_TIME',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 7: Atomicity & Initial Balance Gate',
+  },
+  {
+    id: 5,
+    name: 'Overdraft negative balance on debit',
+    operation: 'update',
+    path: '/accounts/attacker_uid_999',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      balanceCents: -500,
+      lastTxId: 'tx_1',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 2: Validation Blueprints (balanceCents >= 0)',
+  },
+  {
+    id: 6,
+    name: 'Unbacked credit without matching atomic transaction and sender debit',
+    operation: 'update',
+    path: '/accounts/victim_uid_123',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      balanceCents: 500000,
+      lastTxId: 'tx_nonexistent',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 7: Atomicity Guarantee (getAfter/existsAfter)',
+  },
+  {
+    id: 7,
+    name: 'Peer account balance drain attempt',
+    operation: 'update',
+    path: '/accounts/victim_uid_123',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      balanceCents: 0,
+      lastTxId: 'tx_drain',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 4: Tiered Identity Logic (incoming > existing)',
+  },
+  {
+    id: 8,
+    name: 'Self-transfer forgery bypassing top-up limits',
+    operation: 'create',
+    path: '/transactions/tx_self_1',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      txId: 'tx_self_1',
+      type: 'transfer',
+      status: 'completed',
+      senderUid: 'attacker_uid_999',
+      recipientUid: 'attacker_uid_999',
+      senderIban: 'VA4211112222333344',
+      recipientIban: 'VA4211112222333344',
+      senderName: 'Attacker',
+      recipientName: 'Attacker',
+      amountCents: 500000,
+      note: 'Self mint',
+      createdAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 2: Identity Integrity (recipientUid != senderUid)',
+  },
+  {
+    id: 9,
+    name: 'Ledger tampering via transaction update/delete',
+    operation: 'update',
+    path: '/transactions/tx_valid_1',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: { amountCents: 999999 },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 4: Terminal State Locking (immutable ledger)',
+  },
+  {
+    id: 10,
+    name: 'Spoofed backdated timestamp on transaction creation',
+    operation: 'create',
+    path: '/transactions/tx_backdate_1',
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {
+      createdAt: '2020-01-01T00:00:00Z',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Temporal Integrity (createdAt == request.time)',
+  },
+  {
+    id: 11,
+    name: 'ID poisoning with oversized malformed document ID',
+    operation: 'create',
+    path: `/transactions/${'A'.repeat(512)}`,
+    actorUid: 'attacker_uid_999',
+    emailVerified: true,
+    payload: {},
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Pillar 3: Path Variable Hardening (isValidId)',
+  },
+  {
+    id: 12,
+    name: 'Unverified email write attempt',
+    operation: 'create',
+    path: '/users/unverified_uid',
+    actorUid: 'unverified_uid',
+    emailVerified: false,
+    payload: {
+      uid: 'unverified_uid',
+      email: 'spoof@example.com',
+      displayName: 'Spoof',
+      iban: 'VA4299998888777766',
+      createdAt: 'SERVER_TIME',
+      updatedAt: 'SERVER_TIME',
+    },
+    expectedResult: 'PERMISSION_DENIED',
+    enforcingPillar: 'Verified Users Mandate (email_verified == true)',
+  },
+];

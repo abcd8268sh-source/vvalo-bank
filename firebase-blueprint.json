@@ -1,0 +1,289 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Private user profile containing PII and assigned virtual IBAN.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Firebase Auth UID of the user."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Private email address of the user."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Display name shown on account and transfers."
+        },
+        "iban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Unique 18-character virtual IBAN assigned to the user."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of user profile creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last user profile update."
+        }
+      },
+      "required": ["uid", "email", "displayName", "iban", "createdAt", "updatedAt"]
+    },
+    "IbanDirectoryEntry": {
+      "title": "IbanDirectoryEntry",
+      "description": "Non-PII lookup record mapping a virtual IBAN to account holder display name and owner UID.",
+      "type": "object",
+      "properties": {
+        "iban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Unique 18-character virtual IBAN."
+        },
+        "ownerUid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Owner Firebase Auth UID."
+        },
+        "accountHolderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Public account holder display name for IBAN verification."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of directory entry creation."
+        }
+      },
+      "required": ["iban", "ownerUid", "accountHolderName", "createdAt"]
+    },
+    "BankAccount": {
+      "title": "BankAccount",
+      "description": "Virtual EUR play-money bank account storing balance in integer cents and card status. Admin accounts support unlimited virtual funding.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Owner Firebase Auth UID."
+        },
+        "iban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Virtual IBAN linked to this account."
+        },
+        "balanceCents": {
+          "type": "integer",
+          "description": "Current virtual balance in integer cents."
+        },
+        "currency": {
+          "type": "string",
+          "enum": ["EUR"],
+          "minLength": 3,
+          "maxLength": 3,
+          "description": "Virtual currency code."
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "frozen"],
+          "minLength": 6,
+          "maxLength": 6,
+          "description": "Account and virtual card freeze state."
+        },
+        "lastTxId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "ID of the most recent atomic transaction."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of account creation."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last account update."
+        }
+      },
+      "required": ["ownerUid", "iban", "balanceCents", "currency", "accountStatus", "lastTxId", "createdAt", "updatedAt"]
+    },
+    "TransactionRecord": {
+      "title": "TransactionRecord",
+      "description": "Immutable virtual ledger transaction created atomically with account balance updates.",
+      "type": "object",
+      "properties": {
+        "txId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Unique transaction document ID."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["transfer", "topup"],
+          "minLength": 5,
+          "maxLength": 8,
+          "description": "Transaction type."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["completed"],
+          "minLength": 9,
+          "maxLength": 9,
+          "description": "Immutable terminal status."
+        },
+        "senderUid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Sender UID or SYSTEM_VAULT for virtual top-ups."
+        },
+        "recipientUid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Recipient Firebase Auth UID."
+        },
+        "senderIban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Sender virtual IBAN."
+        },
+        "recipientIban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Recipient virtual IBAN."
+        },
+        "senderName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Sender display name."
+        },
+        "recipientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Recipient display name."
+        },
+        "amountCents": {
+          "type": "integer",
+          "description": "Transfer or top-up amount in positive integer cents."
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 140,
+          "description": "Optional payment reference note."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of transaction creation."
+        }
+      },
+      "required": [
+        "txId",
+        "type",
+        "status",
+        "senderUid",
+        "recipientUid",
+        "senderIban",
+        "recipientIban",
+        "senderName",
+        "recipientName",
+        "amountCents",
+        "note",
+        "createdAt"
+      ]
+    },
+    "SavedContact": {
+      "title": "SavedContact",
+      "description": "User-saved IBAN beneficiary contact for quick repeat transfers.",
+      "type": "object",
+      "properties": {
+        "iban": {
+          "type": "string",
+          "pattern": "^VA[0-9]{16}$",
+          "minLength": 18,
+          "maxLength": 18,
+          "description": "Beneficiary virtual IBAN."
+        },
+        "ownerUid": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Owner UID who saved this contact."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Beneficiary display name."
+        },
+        "addedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when contact was saved."
+        }
+      },
+      "required": ["iban", "ownerUid", "name", "addedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Owner-only private profile document containing user PII and IBAN."
+    },
+    "/users/{userId}/contacts/{contactIban}": {
+      "schema": { "$ref": "#/entities/SavedContact" },
+      "description": "Owner-only saved IBAN beneficiary contacts."
+    },
+    "/ibanDirectory/{iban}": {
+      "schema": { "$ref": "#/entities/IbanDirectoryEntry" },
+      "description": "Non-PII IBAN lookup directory allowing exact-IBAN recipient verification without exposing user emails or balances."
+    },
+    "/accounts/{userId}": {
+      "schema": { "$ref": "#/entities/BankAccount" },
+      "description": "Virtual EUR play-money account balance and freeze state per user."
+    },
+    "/transactions/{txId}": {
+      "schema": { "$ref": "#/entities/TransactionRecord" },
+      "description": "Immutable real-time transaction ledger visible only to sender or recipient."
+    }
+  }
+}
